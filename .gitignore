@@ -1,0 +1,11 @@
+# 打包产物
+dist/
+build/
+*.spec
+*.exe
+
+# 个人配置（按键规则、屏幕坐标）
+keymap_config.json
+
+__pycache__/
+*.pyc
