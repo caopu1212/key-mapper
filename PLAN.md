@@ -26,7 +26,8 @@
 - [x] 同一个键可绑多个动作（按下时全部执行）；「同时保留原按键的功能」选项，同一个键的规则共用（鼠标动作默认保留，改键/连发默认屏蔽）
 - [x] 鼠标按键/滚轮作为映射目标和连发目标：左/右/中键、侧键1/2（按住原按键时保持按下）、滚轮上下左右（按住时持续滚动，可配 Ctrl 等组合）；滚轮动作增加左右方向
 - [x] 鼠标中键、侧键1/2、滚轮上下左右作为触发键（可配修饰键，如 Ctrl+滚轮）；左/右键不能作触发键
-- [ ] 按应用生效（只在指定程序前台时启用）、多套配置方案切换
+- [x] 多套方案（2026-11-08）：第二行「方案：[下拉框] [管理方案]」，下拉选中立即切换，两页规则都随方案变；管理菜单有新建空白方案 / 复制当前方案 / 重命名 / 删除当前方案（至少留一个，删除前确认）。启用、暂停热键、提示音是全局的。切换前 `stop_all` 停连点、松开锁定按住的键。用户明确说不要热键切换（不常切），只要能选
+- [ ] 按应用生效（只在指定程序前台时自动切方案）——暂不做
 - [ ] 连点随机间隔/随机偏移
 
 - [x] 界面简化为两页（2026-11-04 用户反馈"UI 很难用"）：
@@ -45,7 +46,7 @@
 - 拖动用 SendInput 绝对坐标移动，个别用 Raw Input 的游戏可能不认
 
 ## 配置格式
-`keymap_config.json`：`{"enabled", "pause": [mods, vk], "beep", "mapping": {"mods:vk": [动作, ...]}}`，动作含 `keep`（保留原按键）（mods 位掩码 Ctrl=1 Shift=2 Alt=4 Win=8；旧格式 `"vk"`、`pause_vk`、单个动作非列表仍可读取），动作 `t` ∈ key/disable/click/drag/wheel/turbo，缺省字段由 `norm_action` 按 `DEFAULTS` 补齐（兼容旧版整数值）。
+`keymap_config.json`：`{"enabled", "pause": [mods, vk], "beep", "current": 方案名, "profiles": {方案名: {"mods:vk": [动作, ...]}}}`（旧格式只有顶层 `"mapping"`，读取时变成方案「默认」，下次保存即为新格式）。`App.profiles[current]` 和 `engine.mapping` 是同一个 dict 对象，增删规则直接改它，动作含 `keep`（保留原按键）（mods 位掩码 Ctrl=1 Shift=2 Alt=4 Win=8；旧格式 `"vk"`、`pause_vk`、单个动作非列表仍可读取），动作 `t` ∈ key/disable/click/drag/wheel/turbo，缺省字段由 `norm_action` 按 `DEFAULTS` 补齐（兼容旧版整数值）。
 
 ## 组合键实现要点
 - 钩子自己记录物理按住的修饰键（`_phys`），不用 GetAsyncKeyState 直接判断：本程序会模拟松开修饰键，系统状态与物理状态不一致
@@ -57,7 +58,7 @@
 ## 踩坑记录
 - 添加对话框用了 `grab_set()`，会独占鼠标事件，导致坐标拾取遮罩收不到点击/移动。拾取前 `grab_release()`，遮罩自己 `grab_set()`，结束后对话框重新 grab。
 - 无边框遮罩窗口经常拿不到键盘焦点，Esc 改由全局键盘钩子（`Engine.esc_cb`）处理。
-- 从 PowerShell 调用要写 `cmd /c ".\restart.bat"`，直接写 `restart.bat` 会提示找不到。不要再接 `| Select-Object`：启动的 exe 继承了管道，命令会一直不结束（打包和启动其实已完成）。
+- 从 PowerShell 调用要写 `cmd /c ".\restart.bat"`，直接写 `restart.bat` 会提示找不到。不要再接 `| Select-Object`：启动的 exe 继承了管道，命令会一直不结束（打包和启动其实已完成）。用 `Start-Process cmd ... -WindowStyle Hidden -Wait` 也不行：旧进程被关掉了，但没有打包也没有重新启动。可靠写法：`cmd /c ".\restart.bat build > build.log 2>&1"`，放后台跑。
 - GUI 自动化测试时，鼠标被用户实际移动会导致拾取坐标偏差，不是程序问题；测试脚本找对话框要排除无边框的红圈提示窗。
 - 测试组合键不要用 SendInput 真按：未被吞掉的键会传给前台程序。改为构造 KBDLLHOOKSTRUCT 直接调 `_on_key`，输出函数全部打桩。
 - 用户边用电脑边跑 GUI 测试时，真实按键（如按住 Backspace 自动重复）会被捕获，导致结果错乱，需要区分。

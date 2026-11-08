@@ -12,7 +12,7 @@ import time
 import tkinter as tk
 import winsound
 from ctypes import wintypes
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 # 打包成 exe 时 __file__ 在临时解压目录里，配置要放在 exe 旁边
 APP_DIR = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__))
@@ -721,6 +721,25 @@ class App:
         self.status = ttk.Label(top, text="")
         self.status.pack(side="right")
 
+        # 方案：几套规则，选哪套就用哪套；启用/暂停热键/提示音是全局的
+        self.profiles = {"默认": {}}
+        self.current = "默认"
+        prow = ttk.Frame(root, padding=(10, 0, 10, 4))
+        prow.pack(fill="x")
+        ttk.Label(prow, text="方案：").pack(side="left")
+        self.profile_box = ttk.Combobox(prow, state="readonly", width=24)
+        self.profile_box.pack(side="left")
+        self.profile_box.bind("<<ComboboxSelected>>", lambda e: self.switch_profile(self.profile_box.get()))
+        mb = ttk.Menubutton(prow, text="管理方案")
+        menu = tk.Menu(mb, tearoff=False)
+        menu.add_command(label="新建空白方案…", command=lambda: self._new_profile(copy=False))
+        menu.add_command(label="复制当前方案…", command=lambda: self._new_profile(copy=True))
+        menu.add_command(label="重命名…", command=self._rename_profile)
+        menu.add_separator()
+        menu.add_command(label="删除当前方案", command=self._delete_profile)
+        mb["menu"] = menu
+        mb.pack(side="left", padx=6)
+
         nb = ttk.Notebook(root)
         nb.pack(fill="both", expand=True, padx=10, pady=(4, 0))
         self._build_key_tab(nb)
@@ -902,8 +921,14 @@ class App:
         try:
             with open(CONFIG_PATH, encoding="utf-8") as f:
                 data = json.load(f)
-            self.engine.mapping = {parse_trigger(k): [norm_action(a) for a in (v if isinstance(v, list) else [v])]
-                                   for k, v in data.get("mapping", {}).items()}
+            def parse(m):
+                return {parse_trigger(k): [norm_action(a) for a in (v if isinstance(v, list) else [v])]
+                        for k, v in m.items()}
+            raw = data.get("profiles") or {"默认": data.get("mapping", {})}  # 旧配置：只有一套规则
+            self.profiles = {name: parse(m) for name, m in raw.items()}
+            cur = data.get("current")
+            self.current = cur if cur in self.profiles else next(iter(self.profiles))
+            self.engine.mapping = self.profiles[self.current]
             self.enabled_var.set(data.get("enabled", True))
             self.engine.enabled = self.enabled_var.get()
             p = data.get("pause") or ([0, data["pause_vk"]] if data.get("pause_vk") else None)
@@ -915,8 +940,73 @@ class App:
     def save(self):
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump({"enabled": self.engine.enabled, "pause": self.engine.pause, "beep": self.beep_var.get(),
-                       "mapping": {f"{m}:{v}": a for (m, v), a in self.engine.mapping.items()}},
+                       "current": self.current,
+                       "profiles": {name: {f"{m}:{v}": a for (m, v), a in mp.items()}
+                                    for name, mp in self.profiles.items()}},
                       f, ensure_ascii=False, indent=2)
+
+    # ---------- 方案 ----------
+    def switch_profile(self, name):
+        if name == self.current or name not in self.profiles:
+            self.profile_box.set(self.current)
+            return
+        self.engine.stop_all()  # 先停掉连点、松开"一直按住"的键，避免卡键
+        self.current = name
+        self.engine.mapping = self.profiles[name]
+        self._clear_form("key")
+        self._clear_form("point")
+        self.save()
+        self.refresh()
+
+    def _ask_name(self, title, initial=""):
+        while True:
+            name = simpledialog.askstring(title, "方案名称：", initialvalue=initial, parent=self.root)
+            if name is None:
+                return None
+            name = name.strip()
+            if not name:
+                messagebox.showwarning("提示", "名称不能为空", parent=self.root)
+            elif name in self.profiles and name != initial:
+                messagebox.showwarning("提示", f"已经有叫「{name}」的方案了", parent=self.root)
+            else:
+                return name
+            initial = name
+
+    def _new_profile(self, copy):
+        name = self._ask_name("复制当前方案" if copy else "新建方案",
+                              f"{self.current} 副本" if copy else "")
+        if not name:
+            return
+        self.profiles[name] = ({rk: [dict(a) for a in acts] for rk, acts in self.engine.mapping.items()}
+                               if copy else {})
+        self.switch_profile(name)
+
+    def _rename_profile(self):
+        old = self.current
+        name = self._ask_name("重命名方案", old)
+        if not name or name == old:
+            return
+        # 保持原顺序
+        self.profiles = {(name if k == old else k): v for k, v in self.profiles.items()}
+        self.current = name
+        self.save()
+        self.refresh()
+
+    def _delete_profile(self):
+        if len(self.profiles) <= 1:
+            messagebox.showinfo("提示", "至少要保留一个方案", parent=self.root)
+            return
+        n = sum(map(len, self.engine.mapping.values()))
+        if not messagebox.askyesno("删除方案", f"删除方案「{self.current}」及其中 {n} 条规则？此操作不能撤销。",
+                                   icon="warning", parent=self.root):
+            return
+        old = self.current
+        names = list(self.profiles)
+        nxt = names[names.index(old) - 1] if names.index(old) > 0 else names[1]
+        self.switch_profile(nxt)
+        del self.profiles[old]
+        self.save()
+        self.refresh()
 
     def refresh(self):
         self.engine.update_hooks()
@@ -944,6 +1034,8 @@ class App:
                     self.key_tree.insert("", "end", iid=f"{s[0]}:{s[1]}:{i}",
                                          values=(combo_name(*s), dst, mode, keep))
         self.pause_btn.set(self.engine.pause)
+        self.profile_box["values"] = list(self.profiles)
+        self.profile_box.set(self.current)
         self.update_status()
 
     def update_status(self):
